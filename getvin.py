@@ -5,6 +5,8 @@
 # A sample VIN_List.csv file is provided. 
 # summary results are printed to the console, as well as to the output_summary file
 
+# 2023-07-13 Added Primary and Secondary Fuel type to summary
+
 import requests,json,csv,time, subprocess, argparse;
 from requests.exceptions import ConnectTimeout
 
@@ -13,7 +15,7 @@ DEFAULT_DELAY = 2    # NHTSA does rate-limiting, but doesn't document the time. 
 default_input_filename = 'VIN_List.csv'
 default_output_summary = 'EV_Counts.txt'
 default_output_details = 'EV_Details.csv'
-output_headers = ['Make', 'Model', 'ModelYear', 'VIN', 'ElectrificationLevel']
+output_headers = ['Make', 'Model', 'ModelYear', 'VIN', 'FuelTypePrimary','FuelTypeSecondary','ElectrificationLevel']
 
 parser = argparse.ArgumentParser(description='extracting information about electric cars from a list of VINs')
 parser.add_argument('input_filename',
@@ -35,7 +37,7 @@ output_summary = args.summary_filename
 output_details = args.details_filename
 print('using input filename: ',input_filename)
 
-counter = dict()
+Counter = dict()
 lines_processed = 0
 EVs_found = 0
              
@@ -49,7 +51,7 @@ def lookup_vin_and_count_EVs(VINs, writer):
     try:            
         r = requests.post(url, data=post_fields, timeout = 5*delay);
     except requests.Timeout as err:
-        print ('timeout..')
+        print ('\nTimeout..')
     if (not r):
         print (post_fields['data'])
         time.sleep(delay)
@@ -68,28 +70,49 @@ def lookup_vin_and_count_EVs(VINs, writer):
         
     obj = json.loads(r.text);
     for results in obj["Results"]:
-        e_level = results.get("ElectrificationLevel", "")
-        if (len(e_level) > 0) and e_level != 'Not Applicable':
-            counter[e_level] = 1 + counter.get(e_level, 0);
-            
+        fuel_type_primary = results.get("FuelTypePrimary","")
+        fuel_type_secondary = results.get("FuelTypeSecondary","")
+        electrification_level = results.get("ElectrificationLevel", "")
+      
+        if (len(fuel_type_primary) == 0 or fuel_type_primary == 'Not Applicable'):
+            Summary_type = "Non-Fuel Vehicle: might be a trailer or a bad VIN"
+        else:
+            Summary_type = fuel_type_primary
+        if (len(fuel_type_secondary) == 0 or fuel_type_secondary == 'Not Applicable'):
+            Summary_type += "|"
+        else:
+            Summary_type += "|" + fuel_type_secondary
+        if (len(electrification_level) == 0 or electrification_level == 'Not Applicable'):
+            Summary_type += '|'
+        else:
+            Summary_type += "|" + electrification_level
             EVs_found += 1;
             row = {\
               'Make':      results.get("Make", "(No Make)"),\
               'Model':	   results.get("Model", "(No Model)"),\
               'ModelYear': results.get("ModelYear", "(No Model Year)"),\
               'VIN':	   results.get("VIN","(NO VIN)"), \
-              'ElectrificationLevel': e_level\
+              'FuelTypePrimary': fuel_type_primary, \
+              'FuelTypeSecondary': fuel_type_secondary, \
+              'ElectrificationLevel': electrification_level\
               }
-            writer.writerow(row)          
+            writer.writerow(row) 
+        Counter[Summary_type] = 1 + Counter.get(Summary_type,0)
+        if (Counter[Summary_type] == 1):
+            print("new summary type: ", Summary_type)    
+
+#        print(results)     
+        
     print('Lines Processed: [%d]\r' % (lines_processed), end="")
 
 def print_summary():
     print('Lines Processed: [%d]' % (lines_processed))
     with open(output_summary, 'w') as f:
-        for level in counter:
-            print(level, ': ', counter[level], file= f)
-            print(level, ': ', counter[level])
-        Summary = f" Summary: \n EVs found: {EVs_found} \n Non-EVs: {lines_processed - EVs_found}\n Total: {lines_processed} "
+        for summary_type in Counter:
+            print(summary_type, ': ', Counter[summary_type], file= f)
+            print(summary_type, ': ', Counter[summary_type])
+            
+        Summary = f" Summary: \n EVs found: {EVs_found} \n Non-EVs: {lines_processed - EVs_found}\n Total: {lines_processed}"
         print(Summary)
         print(Summary, file=f)
         print("detailed results available in ", output_details)    
@@ -108,7 +131,7 @@ with open(input_filename, newline='') as fin, open(output_details, 'w') as fout:
         for row in reader:
             lines_processed += 1
             VINs.append(row["VIN"]) 
-            if (lines_processed % CHUNKSIZE == CHUNKSIZE-1):
+            if (lines_processed % CHUNKSIZE == 0):
                 lookup_vin_and_count_EVs(VINs, writer) 
                 VINs = []
                        
